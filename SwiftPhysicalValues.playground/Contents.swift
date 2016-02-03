@@ -29,7 +29,7 @@ import Cocoa
 
 // How long does it take to go from Paris to Bordeaux in a TGV running at 300km/h ?
 let distance = 589 * km
-let speed = 300 * km / h
+let speed = 300 * (km / h)
 
 distance / speed
 
@@ -41,6 +41,8 @@ let finalSpeed = g * elapsedTime
 // and how far will it be after 47 seconds ?
 elapsedTime = 47 * sec
 0.5 * g * elapsedTime**2
+
+let temperature = 2 * C
 
 // Do not add values with different units : it makes no sense !
 elapsedTime + finalSpeed

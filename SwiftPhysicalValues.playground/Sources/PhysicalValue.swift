@@ -19,89 +19,20 @@
 
 import Foundation
 
-// MARK: - MKSAUnit
-
-/// This class represents a unit in the MKSA system (meter, kilogram, second, amper)
-public struct MKSAUnit : CustomStringConvertible {
-  public let m: Int
-  public let k: Int
-  public let s: Int
-  public let a: Int
-  public let scale: Double
-  
-  public init(m: Int = 0, k: Int = 0, s: Int = 0, a: Int = 0, scale: Double = 1.0) {
-    self.m = m
-    self.k = k
-    self.s = s
-    self.a = a
-    self.scale = scale
-  }
-  
-  public var description: String {
-    let unitToStingTransformer: (String, Int) -> String = { (name, value) in
-      switch value {
-      case 1, -1:
-        return name
-      case _ where abs(value) > 1:
-        return "\(name)^\(value)"
-      default:
-        return ""
-      }
-    }
-    let invertedUnitToStingTransformer: (String, Int) -> String = { (name, value) in
-      switch value {
-      case 1, -1:
-        return name
-      case _ where abs(value) > 1:
-        return "\(name)^\(-value)"
-      default:
-        return ""
-      }
-    }
-    
-    let units = [("m", self.m), ("kg", self.k), ("s", self.s), ("A", self.a)]
-    let positiveUnits = units.filter { $0.1 > 0 }.sort { $0.0.1 <= $0.1.1 }
-    let negativeUnits = units.filter { $0.1 < 0 }.sort { $0.0.1 <= $0.1.1 }
-    
-    switch (positiveUnits.count, negativeUnits.count) {
-    case let (positive, negative) where positive == 0 && negative == 0:
-      return ""
-    case let (positive, negative) where positive > 0 && negative == 0:
-      return positiveUnits.map(unitToStingTransformer).joinWithSeparator(".")
-    case let (positive, negative) where positive == 0 && negative > 0:
-      return negativeUnits.map(unitToStingTransformer).joinWithSeparator(".")
-    case let (positive, negative) where positive > 0 && negative > 0:
-      return positiveUnits.map(unitToStingTransformer).joinWithSeparator(".") + "/" + negativeUnits.map(invertedUnitToStingTransformer).joinWithSeparator("/")
-    default:
-      return "Formatting error"
-    }
-  }
-}
-
-extension MKSAUnit : Equatable {
-}
-public func ==(lhs: MKSAUnit, rhs: MKSAUnit) -> Bool {
-  return lhs.m == rhs.m
-    && lhs.k == rhs.k
-    && lhs.s == rhs.s
-    && lhs.a == rhs.a
-}
-
-// MARK: - Physical unit
-
 /// A physical value is a floating point value associated to a unit.
 public struct PhysicalValue {
   private let unit: MKSAUnit
+  /// The value in the provided unit
   private let value: Double
-  /// Scaled value is the value with the unit scale factor applied to it.
-  /// i.e., for a physical value declared as 1 km, the value will be 1000 (in the MKSA system, thus expressed in meters), the scaled value will be 1.
-  internal var scaledValue:Double { return value * unit.scale }
+  // The value normalized in the MKSA system
+  // For exemple, if the physical value is 1km, value will be 1, and normalizedValue will be 1000
+  internal var normalizedValue:Double { return unit.normalizedValue(value)}
   
   public init(value: Double, unit: MKSAUnit) {
     self.value = value;
     self.unit = unit;
   }
-  
+
   public init(sourceValue: PhysicalValue) {
     self.init(value: sourceValue.value, unit: sourceValue.unit)
   }
@@ -113,86 +44,112 @@ public func -(lhs: PhysicalValue, rhs: PhysicalValue) -> PhysicalValue {
   // We cannot add values with different units.
   // But how to report that without crashing the app ?
   precondition(lhs.unit == rhs.unit, "Substracting values with different units is not a good idea, trust me.")
-  return PhysicalValue(value: (lhs.scaledValue - rhs.scaledValue) / lhs.unit.scale, unit: lhs.unit)
+  return PhysicalValue(value: (lhs.normalizedValue - rhs.normalizedValue) / lhs.unit.scale, unit: lhs.unit)
 }
+
 public func +(lhs: PhysicalValue, rhs: PhysicalValue) -> PhysicalValue {
   // We cannot add values with different units.
   // But how to report that without crashing the app ?
   precondition(lhs.unit == rhs.unit, "Adding values with different units is not a good idea, trust me.")
-  return PhysicalValue(value: (lhs.scaledValue + rhs.scaledValue) / lhs.unit.scale, unit: lhs.unit)
+  return PhysicalValue(value: (lhs.normalizedValue + rhs.normalizedValue) / lhs.unit.scale - lhs.unit.unormalizedShift, unit: lhs.unit)
 }
+
 public func *(lhs: PhysicalValue, rhs: PhysicalValue) -> PhysicalValue {
-  let newUnit = MKSAUnit(m: lhs.unit.m + rhs.unit.m, k: lhs.unit.k + rhs.unit.k, s: lhs.unit.s + rhs.unit.s, a: lhs.unit.a + rhs.unit.a, scale: lhs.unit.scale)
-  return PhysicalValue(value: (lhs.scaledValue * rhs.scaledValue) / lhs.unit.scale, unit: newUnit)
+  let newUnit = lhs.unit * rhs.unit
+  return PhysicalValue(value: newUnit.denormalizeValue(lhs.normalizedValue * rhs.normalizedValue), unit: newUnit)
 }
+
 public func /(lhs: PhysicalValue, rhs: PhysicalValue) -> PhysicalValue {
-  let newUnit = MKSAUnit(m: lhs.unit.m - rhs.unit.m, k: lhs.unit.k - rhs.unit.k, s: lhs.unit.s - rhs.unit.s, a: lhs.unit.a - rhs.unit.a, scale: lhs.unit.scale)
-  return PhysicalValue(value: (lhs.scaledValue / rhs.scaledValue) / lhs.unit.scale, unit: newUnit)
+  let newUnit = lhs.unit / rhs.unit
+  return PhysicalValue(value: newUnit.denormalizeValue(lhs.normalizedValue / rhs.normalizedValue), unit: newUnit)
 }
+
+public func *(lhs: Double, rhs: PhysicalValue) -> PhysicalValue {
+  return PhysicalValue(value: lhs * rhs.value, unit: rhs.unit)
+}
+
+public func /(lhs: Double, rhs: PhysicalValue) -> PhysicalValue {
+  return PhysicalValue(value: lhs / rhs.value, unit: rhs.unit)
+}
+
+public func *(lhs: PhysicalValue, rhs: MKSAUnit) -> PhysicalValue {
+  let normalizedValue = lhs.normalizedValue
+  let newUnit = lhs.unit * rhs
+  return PhysicalValue(value: newUnit.denormalizeValue(normalizedValue), unit: newUnit)
+}
+
+public func /(lhs: PhysicalValue, rhs: MKSAUnit) -> PhysicalValue {
+  let normalizedValue = lhs.normalizedValue
+  let newUnit = lhs.unit / rhs
+  return PhysicalValue(value: newUnit.denormalizeValue(normalizedValue), unit: newUnit)
+}
+
 infix operator ** { associativity none precedence 160 }
 public func **(lhs: PhysicalValue, power: Int) -> PhysicalValue {
-  let newUnit = MKSAUnit(m: lhs.unit.m * power, k: lhs.unit.k * power, s: lhs.unit.s * power, a: lhs.unit.a * power, scale: lhs.unit.scale)
-  return PhysicalValue(value: pow(lhs.scaledValue, Double(power)), unit: newUnit)
+  let newUnit = lhs.unit**power
+  return PhysicalValue(value: pow(lhs.value, Double(power)), unit: newUnit)
+}
+
+public func sqrt(value: PhysicalValue) -> PhysicalValue {
+  let newUnit = MKSAUnit(m: value.unit.m / 2,
+    k: value.unit.k / 2,
+    s: value.unit.s / 2,
+    a: value.unit.a / 2,
+    t: value.unit.t / 2,
+    i: value.unit.i / 2,
+    n: value.unit.n / 2,
+    scale: sqrt(value.unit.scale),
+    unormalizedShift: sqrt(value.unit.unormalizedShift))
+  return PhysicalValue(value: sqrt(value.value), unit: newUnit);
 }
 
 extension PhysicalValue : Comparable, Equatable {
 }
+
 public func <(lhs: PhysicalValue, rhs: PhysicalValue) -> Bool {
   return lhs.value < rhs.value;
 }
+
 public func <=(lhs: PhysicalValue, rhs: PhysicalValue) -> Bool {
   return lhs.value < rhs.value;
 }
+
 public func >=(lhs: PhysicalValue, rhs: PhysicalValue) -> Bool {
   return lhs.value < rhs.value;
 }
+
 public func >(lhs: PhysicalValue, rhs: PhysicalValue) -> Bool {
   return lhs.value < rhs.value;
 }
+
 public func ==(lhs: PhysicalValue, rhs: PhysicalValue) -> Bool {
-  return lhs.scaledValue == rhs.scaledValue && lhs.unit == rhs.unit;
-}
-
-// MARK: Some other handy protocols conformance
-
-extension PhysicalValue : FloatLiteralConvertible, IntegerLiteralConvertible, SignedNumberType {
-    public typealias IntegerLiteralType = Int
-    public typealias FloatLiteralType = Double
-    
-    public init(integerLiteral value: IntegerLiteralType) {
-      self.value = Double(value)
-      self.unit = MKSAUnit()
-    }
-    
-    public init(floatLiteral value: FloatLiteralType) {
-      self.value = value
-      self.unit = MKSAUnit()
-    }
-}
-
-extension PhysicalValue : Strideable {
-  public func distanceTo(other: PhysicalValue) -> PhysicalValue {
-    return PhysicalValue(value: self.value.distanceTo(other.value), unit: self.unit)
-  }
-  
-  public func advancedBy(amount: PhysicalValue) -> PhysicalValue {
-    return self + amount
-  }
+  return lhs.normalizedValue == rhs.normalizedValue && lhs.unit == rhs.unit;
 }
 
 extension PhysicalValue : CustomStringConvertible {
   public var description: String {
-    return "\(self.value * self.unit.scale) \(unit)"
+    return "\(self.normalizedValue) \(unit)"
   }
 }
 
-// MARK: - Some pre-defined units
+// MARK: Hepers to create PhysicalValues
 
-public let mm  = PhysicalValue(value: 1, unit: MKSAUnit(m: 1, scale: 0.001))
-public let cm  = PhysicalValue(value: 1, unit: MKSAUnit(m: 1, scale: 0.01))
-public let m   = PhysicalValue(value: 1, unit: MKSAUnit(m: 1))
-public let km  = PhysicalValue(value: 1, unit: MKSAUnit(m: 1, scale: 1000))
-public let kg  = PhysicalValue(value: 1, unit: MKSAUnit(k: 1))
-public let sec = PhysicalValue(value: 1, unit: MKSAUnit(s: 1))
-public let min = PhysicalValue(value: 1, unit: MKSAUnit(s: 60))
-public let h   = PhysicalValue(value: 1, unit: MKSAUnit(s: 1, scale: 3600))
+public func *(lhs: Double, rhs: MKSAUnit) -> PhysicalValue {
+  return PhysicalValue(value: lhs, unit: rhs);
+}
+
+/// MARK: Length
+public let mm  = MKSAUnit(m: 1, scale: 0.001)
+public let cm  = MKSAUnit(m: 1, scale: 0.01)
+public let m   = MKSAUnit(m: 1)
+public let km  = MKSAUnit(m: 1, scale: 1000)
+/// MARK: Masse
+public let kg  = MKSAUnit(k: 1)
+/// MARK: Time
+public let sec = MKSAUnit(s: 1)
+public let min = MKSAUnit(s: 60)
+public let h   = MKSAUnit(s: 1, scale: 3600)
+/// MARK: Temperatures
+public let K   = MKSAUnit(t: 1)
+public let C   = MKSAUnit(t: 1, unormalizedShift: 273.15)
+public let F   = MKSAUnit(t: 1, scale: 5/9, unormalizedShift: 459.67)
